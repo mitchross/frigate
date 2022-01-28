@@ -13,7 +13,8 @@ from pydantic import BaseModel, Extra, Field, validator
 from pydantic.fields import PrivateAttr
 
 from frigate.const import BASE_DIR, CACHE_DIR, YAML_EXT
-from frigate.util import create_mask, deep_merge, load_labels
+from frigate.edgetpu import load_labels
+from frigate.util import create_mask, deep_merge
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ class DetectorConfig(FrigateBaseModel):
     device: str = Field(default="usb", title="Device Type")
     num_threads: int = Field(default=3, title="Number of detection threads")
 
+class UIConfig(FrigateBaseModel):
+    use_experimental: bool = Field(default=False, title="Experimental UI")
 
 class MqttConfig(FrigateBaseModel):
     host: str = Field(title="MQTT Host")
@@ -641,7 +644,7 @@ class ModelConfig(FrigateBaseModel):
         return self._merged_labelmap
 
     @property
-    def colormap(self) -> Dict[int, Tuple[int, int, int]]:
+    def colormap(self) -> Dict[int, tuple[int, int, int]]:
         return self._colormap
 
     def __init__(self, **config):
@@ -684,6 +687,7 @@ class FrigateConfig(FrigateBaseModel):
     environment_vars: Dict[str, str] = Field(
         default_factory=dict, title="Frigate environment variables."
     )
+    ui: UIConfig = Field(default_factory=UIConfig, title="UI configuration.")
     model: ModelConfig = Field(
         default_factory=ModelConfig, title="Detection model configuration."
     )
