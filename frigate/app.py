@@ -67,6 +67,12 @@ class FrigateApp:
 
     def init_config(self):
         config_file = os.environ.get("CONFIG_FILE", "/config/config.yml")
+
+        # Check if we can use .yaml instead of .yml
+        config_file_yaml = config_file.replace(".yml", ".yaml")
+        if os.path.isfile(config_file_yaml):
+            config_file = config_file_yaml
+
         user_config = FrigateConfig.parse_file(config_file)
         self.config = user_config.runtime_config
 
@@ -104,6 +110,9 @@ class FrigateApp:
         self.detected_frames_queue = mp.Queue(
             maxsize=len(self.config.cameras.keys()) * 2
         )
+
+        # Queue for recordings info
+        self.recordings_info_queue = mp.Queue()
 
     def init_database(self):
         # Migrate DB location
@@ -203,6 +212,7 @@ class FrigateApp:
             self.event_queue,
             self.event_processed_queue,
             self.video_output_queue,
+            self.recordings_info_queue,
             self.stop_event,
         )
         self.detected_frames_processor.start()
@@ -270,7 +280,9 @@ class FrigateApp:
         self.event_cleanup.start()
 
     def start_recording_maintainer(self):
-        self.recording_maintainer = RecordingMaintainer(self.config, self.stop_event)
+        self.recording_maintainer = RecordingMaintainer(
+            self.config, self.recordings_info_queue, self.stop_event
+        )
         self.recording_maintainer.start()
 
     def start_recording_cleanup(self):

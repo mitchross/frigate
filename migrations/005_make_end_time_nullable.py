@@ -1,4 +1,4 @@
-"""Peewee migrations -- 003_create_recordings_table.py.
+"""Peewee migrations -- 004_add_bbox_region_area.py.
 
 Some examples (model - class or model name)::
 
@@ -20,26 +20,23 @@ Some examples (model - class or model name)::
     > migrator.add_default(model, field_name, default)
 
 """
-import peewee as pw
 
-from frigate.models import Recordings
+import datetime as dt
+import peewee as pw
+from playhouse.sqlite_ext import *
+from decimal import ROUND_HALF_EVEN
+from frigate.models import Event
+
+try:
+    import playhouse.postgres_ext as pw_pext
+except ImportError:
+    pass
 
 SQL = pw.SQL
 
 
 def migrate(migrator, database, fake=False, **kwargs):
-    migrator.sql(
-        'CREATE TABLE IF NOT EXISTS "recordings" ("id" VARCHAR(30) NOT NULL PRIMARY KEY, "camera" VARCHAR(20) NOT NULL, "path" VARCHAR(255) NOT NULL, "start_time" DATETIME NOT NULL, "end_time" DATETIME NOT NULL, "duration" REAL NOT NULL)'
-    )
-    migrator.sql(
-        'CREATE INDEX IF NOT EXISTS "recordings_camera" ON "recordings" ("camera")'
-    )
-    migrator.sql(
-        'CREATE UNIQUE INDEX IF NOT EXISTS "recordings_path" ON "recordings" ("path")'
-    )
-    migrator.sql(
-        'CREATE INDEX IF NOT EXISTS "recordings_start_time_end_time" ON "recordings" (start_time, end_time)'
-    )
+    migrator.drop_not_null(Event, "end_time")
 
 
 def rollback(migrator, database, fake=False, **kwargs):

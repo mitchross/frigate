@@ -159,6 +159,8 @@ detect:
   enabled: True
   # Optional: Number of frames without a detection before frigate considers an object to be gone. (default: 5x the frame rate)
   max_disappeared: 25
+  # Optional: Frequency for running detection on stationary objects (default: 10x the frame rate)
+  stationary_interval: 50
 
 # Optional: Object configuration
 # NOTE: Can be overridden at the camera level
@@ -192,10 +194,14 @@ motion:
   # Increasing this value will make motion detection less sensitive and decreasing it will make motion detection more sensitive.
   # The value should be between 1 and 255.
   threshold: 25
-  # Optional: Minimum size in pixels in the resized motion image that counts as motion (default: ~0.17% of the motion frame area)
-  # Increasing this value will prevent smaller areas of motion from being detected. Decreasing will make motion detection more sensitive to smaller
-  # moving objects.
-  contour_area: 100
+  # Optional: Minimum size in pixels in the resized motion image that counts as motion (default: 30)
+  # Increasing this value will prevent smaller areas of motion from being detected. Decreasing will
+  # make motion detection more sensitive to smaller moving objects.
+  # As a rule of thumb:
+  #  - 15 - high sensitivity
+  #  - 30 - medium sensitivity
+  #  - 50 - low sensitivity
+  contour_area: 30
   # Optional: Alpha value passed to cv2.accumulateWeighted when averaging the motion delta across multiple frames (default: shown below)
   # Higher values mean the current frame impacts the delta a lot, and a single raindrop may register as motion.
   # Too low and a fast moving person wont be detected as motion.
@@ -205,10 +211,10 @@ motion:
   # Low values will cause things like moving shadows to be detected as motion for longer.
   # https://www.geeksforgeeks.org/background-subtraction-in-an-image-using-concept-of-running-average/
   frame_alpha: 0.2
-  # Optional: Height of the resized motion frame  (default: 1/6th of the original frame height, but no less than 180)
-  # This operates as an efficient blur alternative. Higher values will result in more granular motion detection at the expense of higher CPU usage.
-  # Lower values result in less CPU, but small changes may not register as motion.
-  frame_height: 180
+  # Optional: Height of the resized motion frame  (default: 50)
+  # This operates as an efficient blur alternative. Higher values will result in more granular motion detection at the expense
+  # of higher CPU usage. Lower values result in less CPU, but small changes may not register as motion.
+  frame_height: 50
   # Optional: motion mask
   # NOTE: see docs for more detailed info on creating masks
   mask: 0,900,1080,900,1080,1920,0,1920
@@ -218,15 +224,23 @@ motion:
 record:
   # Optional: Enable recording (default: shown below)
   enabled: False
-  # Optional: Number of days to retain recordings regardless of events (default: shown below)
-  # NOTE: This should be set to 0 and retention should be defined in events section below
-  #       if you only want to retain recordings of events.
-  retain_days: 0
+  # Optional: Retention settings for recording
+  retain:
+    # Optional: Number of days to retain recordings regardless of events (default: shown below)
+    # NOTE: This should be set to 0 and retention should be defined in events section below
+    #       if you only want to retain recordings of events.
+    days: 0
+    # Optional: Mode for retention. Available options are: all, motion, and active_objects
+    #   all - save all recording segments regardless of activity
+    #   motion - save all recordings segments with any detected motion
+    #   active_objects - save all recording segments with active/moving objects
+    # NOTE: this mode only applies when the days setting above is greater than 0
+    mode: all
   # Optional: Event recording settings
   events:
     # Optional: Maximum length of time to retain video during long events. (default: shown below)
     # NOTE: If an object is being tracked for longer than this amount of time, the retained recordings
-    #       will be the last x seconds of the event unless retain_days under record is > 0.
+    #       will be the last x seconds of the event unless retain->days under record is > 0.
     max_seconds: 300
     # Optional: Number of seconds before the event to include (default: shown below)
     pre_capture: 5
@@ -241,6 +255,16 @@ record:
     retain:
       # Required: Default retention days (default: shown below)
       default: 10
+      # Optional: Mode for retention. (default: shown below)
+      #   all - save all recording segments for events regardless of activity
+      #   motion - save all recordings segments for events with any detected motion
+      #   active_objects - save all recording segments for event with active/moving objects
+      #
+      # NOTE: If the retain mode for the camera is more restrictive than the mode configured
+      #       here, the segments will already be gone by the time this mode is applied.
+      #       For example, if the camera retain mode is "motion", the segments without motion are
+      #       never stored, so setting the mode to "all" here won't bring them back.
+      mode: active_objects
       # Optional: Per object retention days
       objects:
         person: 15

@@ -12,9 +12,8 @@ import yaml
 from pydantic import BaseModel, Extra, Field, validator
 from pydantic.fields import PrivateAttr
 
-from frigate.const import BASE_DIR, CACHE_DIR, RECORD_DIR
-from frigate.edgetpu import load_labels
-from frigate.util import create_mask, deep_merge
+from frigate.const import BASE_DIR, CACHE_DIR, YAML_EXT
+from frigate.util import create_mask, deep_merge, load_labels
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +64,17 @@ class MqttConfig(FrigateBaseModel):
         return v
 
 
+class RetainModeEnum(str, Enum):
+    all = "all"
+    motion = "motion"
+    active_objects = "active_objects"
+
+
 class RetainConfig(FrigateBaseModel):
     default: float = Field(default=10, title="Default retention period.")
+    mode: RetainModeEnum = Field(
+        default=RetainModeEnum.active_objects, title="Retain mode."
+    )
     objects: Dict[str, float] = Field(
         default_factory=dict, title="Object retention period."
     )
@@ -88,9 +96,18 @@ class EventsConfig(FrigateBaseModel):
     )
 
 
+class RecordRetainConfig(FrigateBaseModel):
+    days: float = Field(default=0, title="Default retention period.")
+    mode: RetainModeEnum = Field(default=RetainModeEnum.all, title="Retain mode.")
+
+
 class RecordConfig(FrigateBaseModel):
     enabled: bool = Field(default=False, title="Enable record on all cameras.")
-    retain_days: float = Field(default=0, title="Recording retention period in days.")
+    # deprecated - to be removed in a future version
+    retain_days: Optional[float] = Field(title="Recording retention period in days.")
+    retain: RecordRetainConfig = Field(
+        default_factory=RecordRetainConfig, title="Record retention settings."
+    )
     events: EventsConfig = Field(
         default_factory=EventsConfig, title="Event specific settings."
     )
@@ -103,10 +120,10 @@ class MotionConfig(FrigateBaseModel):
         ge=1,
         le=255,
     )
-    contour_area: Optional[int] = Field(title="Contour Area")
+    contour_area: Optional[int] = Field(default=30, title="Contour Area")
     delta_alpha: float = Field(default=0.2, title="Delta Alpha")
     frame_alpha: float = Field(default=0.2, title="Frame Alpha")
-    frame_height: Optional[int] = Field(title="Frame Height")
+    frame_height: Optional[int] = Field(default=50, title="Frame Height")
     mask: Union[str, List[str]] = Field(
         default="", title="Coordinates polygon for the motion mask."
     )
@@ -118,15 +135,6 @@ class RuntimeMotionConfig(MotionConfig):
 
     def __init__(self, **config):
         frame_shape = config.get("frame_shape", (1, 1))
-
-        if "frame_height" not in config:
-            config["frame_height"] = max(frame_shape[0] // 6, 180)
-
-        if "contour_area" not in config:
-            frame_width = frame_shape[1] * config["frame_height"] / frame_shape[0]
-            config["contour_area"] = (
-                config["frame_height"] * frame_width * 0.00173611111
-            )
 
         mask = config.get("mask", "")
         config["raw_mask"] = mask
@@ -161,6 +169,10 @@ class DetectConfig(FrigateBaseModel):
     enabled: bool = Field(default=True, title="Detection Enabled.")
     max_disappeared: Optional[int] = Field(
         title="Maximum number of frames the object can dissapear before detection ends."
+    )
+    stationary_interval: Optional[int] = Field(
+        title="Frame interval for checking stationary objects.",
+        ge=1,
     )
 
 
@@ -495,6 +507,7 @@ class CameraConfig(FrigateBaseModel):
     timestamp_style: TimestampStyleConfig = Field(
         default_factory=TimestampStyleConfig, title="Timestamp style configuration."
     )
+    _ffmpeg_cmds: List[Dict[str, List[str]]] = PrivateAttr()
 
     def __init__(self, **config):
         # Set zone colors
@@ -521,6 +534,11 @@ class CameraConfig(FrigateBaseModel):
 
     @property
     def ffmpeg_cmds(self) -> List[Dict[str, List[str]]]:
+        return self._ffmpeg_cmds
+
+    def create_ffmpeg_cmds(self):
+        if "_ffmpeg_cmds" in self:
+            return
         ffmpeg_cmds = []
         for ffmpeg_input in self.ffmpeg.inputs:
             ffmpeg_cmd = self._get_ffmpeg_cmd(ffmpeg_input)
@@ -528,7 +546,7 @@ class CameraConfig(FrigateBaseModel):
                 continue
 
             ffmpeg_cmds.append({"roles": ffmpeg_input.roles, "cmd": ffmpeg_cmd})
-        return ffmpeg_cmds
+        self._ffmpeg_cmds = ffmpeg_cmds
 
     def _get_ffmpeg_cmd(self, ffmpeg_input: CameraInput):
         ffmpeg_output_args = []
@@ -623,7 +641,7 @@ class ModelConfig(FrigateBaseModel):
         return self._merged_labelmap
 
     @property
-    def colormap(self) -> Dict[int, tuple[int, int, int]]:
+    def colormap(self) -> Dict[int, Tuple[int, int, int]]:
         return self._colormap
 
     def __init__(self, **config):
@@ -745,6 +763,11 @@ class FrigateConfig(FrigateBaseModel):
             if camera_config.detect.max_disappeared is None:
                 camera_config.detect.max_disappeared = max_disappeared
 
+            # Default stationary_interval configuration
+            stationary_interval = camera_config.detect.fps * 10
+            if camera_config.detect.stationary_interval is None:
+                camera_config.detect.stationary_interval = stationary_interval
+
             # FFMPEG input substitution
             for input in camera_config.ffmpeg.inputs:
                 input.path = input.path.format(**FRIGATE_ENV_VARS)
@@ -806,6 +829,26 @@ class FrigateConfig(FrigateBaseModel):
                     f"Camera {name} has rtmp enabled, but rtmp is not assigned to an input."
                 )
 
+            # backwards compatibility for retain_days
+            if not camera_config.record.retain_days is None:
+                logger.warning(
+                    "The 'retain_days' config option has been DEPRECATED and will be removed in a future version. Please use the 'days' setting under 'retain'"
+                )
+                if camera_config.record.retain.days == 0:
+                    camera_config.record.retain.days = camera_config.record.retain_days
+
+            # warning if the higher level record mode is potentially more restrictive than the events
+            if (
+                camera_config.record.retain.days != 0
+                and camera_config.record.retain.mode != RetainModeEnum.all
+                and camera_config.record.events.retain.mode
+                != camera_config.record.retain.mode
+            ):
+                logger.warning(
+                    f"Recording retention is configured for {camera_config.record.retain.mode} and event retention is configured for {camera_config.record.events.retain.mode}. The more restrictive retention policy will be applied."
+                )
+            # generage the ffmpeg commands
+            camera_config.create_ffmpeg_cmds()
             config.cameras[name] = camera_config
 
         return config
@@ -823,7 +866,7 @@ class FrigateConfig(FrigateBaseModel):
         with open(config_file) as f:
             raw_config = f.read()
 
-        if config_file.endswith(".yml"):
+        if config_file.endswith(YAML_EXT):
             config = yaml.safe_load(raw_config)
         elif config_file.endswith(".json"):
             config = json.loads(raw_config)

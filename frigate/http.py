@@ -1,6 +1,7 @@
 import base64
 from collections import OrderedDict
 from datetime import datetime, timedelta
+import copy
 import json
 import glob
 import logging
@@ -181,7 +182,7 @@ def event_thumbnail(id):
         thumbnail_bytes = jpg.tobytes()
 
     response = make_response(thumbnail_bytes)
-    response.headers["Content-Type"] = "image/jpg"
+    response.headers["Content-Type"] = "image/jpeg"
     return response
 
 
@@ -190,7 +191,7 @@ def event_snapshot(id):
     download = request.args.get("download", type=bool)
     jpg_bytes = None
     try:
-        event = Event.get(Event.id == id)
+        event = Event.get(Event.id == id, Event.end_time != None)
         if not event.has_snapshot:
             return "Snapshot not available", 404
         # read snapshot from disk
@@ -222,7 +223,7 @@ def event_snapshot(id):
         return "Event not found", 404
 
     response = make_response(jpg_bytes)
-    response.headers["Content-Type"] = "image/jpg"
+    response.headers["Content-Type"] = "image/jpeg"
     if download:
         response.headers[
             "Content-Disposition"
@@ -321,7 +322,7 @@ def config():
     # add in the ffmpeg_cmds
     for camera_name, camera in current_app.frigate_config.cameras.items():
         camera_dict = config["cameras"][camera_name]
-        camera_dict["ffmpeg_cmds"] = camera.ffmpeg_cmds
+        camera_dict["ffmpeg_cmds"] = copy.deepcopy(camera.ffmpeg_cmds)
         for cmd in camera_dict["ffmpeg_cmds"]:
             cmd["cmd"] = " ".join(cmd["cmd"])
 
@@ -358,9 +359,10 @@ def best(camera_name, label):
 
         crop = bool(request.args.get("crop", 0, type=int))
         if crop:
-            box = best_object.get("box", (0, 0, 300, 300))
+            box_size = 300
+            box = best_object.get("box", (0, 0, box_size, box_size))
             region = calculate_region(
-                best_frame.shape, box[0], box[1], box[2], box[3], 1.1
+                best_frame.shape, box[0], box[1], box[2], box[3], box_size, multiplier=1.1
             )
             best_frame = best_frame[region[1] : region[3], region[0] : region[2]]
 
@@ -375,7 +377,7 @@ def best(camera_name, label):
             ".jpg", best_frame, [int(cv2.IMWRITE_JPEG_QUALITY), resize_quality]
         )
         response = make_response(jpg.tobytes())
-        response.headers["Content-Type"] = "image/jpg"
+        response.headers["Content-Type"] = "image/jpeg"
         return response
     else:
         return "Camera named {} not found".format(camera_name), 404
@@ -437,7 +439,7 @@ def latest_frame(camera_name):
             ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), resize_quality]
         )
         response = make_response(jpg.tobytes())
-        response.headers["Content-Type"] = "image/jpg"
+        response.headers["Content-Type"] = "image/jpeg"
         return response
     else:
         return "Camera named {} not found".format(camera_name), 404
@@ -657,10 +659,15 @@ def vod_ts(camera, start_ts, end_ts):
         # Determine if we need to end the last clip early
         if recording.end_time > end_ts:
             duration -= int((recording.end_time - end_ts) * 1000)
-        clips.append(clip)
-        durations.append(duration)
+
+        if duration > 0:
+            clips.append(clip)
+            durations.append(duration)
+        else:
+            logger.warning(f"Recording clip is missing or empty: {recording.path}")
 
     if not clips:
+        logger.error("No recordings found for the requested time range")
         return "No recordings found.", 404
 
     hour_ago = datetime.now() - timedelta(hours=1)
@@ -689,15 +696,20 @@ def vod_event(id):
     try:
         event: Event = Event.get(Event.id == id)
     except DoesNotExist:
+        logger.error(f"Event not found: {id}")
         return "Event not found.", 404
 
     if not event.has_clip:
-        return "Clip not available", 404
+        logger.error(f"Event does not have recordings: {id}")
+        return "Recordings not available", 404
 
     clip_path = os.path.join(CLIPS_DIR, f"{event.camera}-{id}.mp4")
 
     if not os.path.isfile(clip_path):
-        return vod_ts(event.camera, event.start_time, event.end_time)
+        end_ts = (
+            datetime.now().timestamp() if event.end_time is None else event.end_time
+        )
+        return vod_ts(event.camera, event.start_time, end_ts)
 
     duration = int((event.end_time - event.start_time) * 1000)
     return jsonify(
