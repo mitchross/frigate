@@ -36,6 +36,7 @@ from frigate.const import CLIPS_DIR, MAX_SEGMENT_DURATION, RECORD_DIR
 from frigate.models import Event, Recordings
 from frigate.object_processing import TrackedObject
 from frigate.stats import stats_snapshot
+from frigate.prometheus_export import export_metrics
 from frigate.util import (
     clean_camera_user_pass,
     ffprobe_stream,
@@ -819,6 +820,10 @@ def stats():
     )
     return jsonify(stats)
 
+
+@bp.route("/metrics")
+def metrics():
+     return export_metrics(stats())
 
 @bp.route("/<camera_name>")
 def mjpeg_feed(camera_name):

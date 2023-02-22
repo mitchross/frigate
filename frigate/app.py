@@ -34,6 +34,7 @@ from frigate.version import VERSION
 from frigate.video import capture_camera, track_camera
 from frigate.watchdog import FrigateWatchdog
 from frigate.types import CameraMetricsTypes
+from prometheus_client.core import REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,10 @@ class FrigateApp:
         self.stats_tracking = stats_init(
             self.config, self.camera_metrics, self.detectors
         )
+        from frigate.prometheus_export import CustomCollector
+        REGISTRY.register(CustomCollector())
+
+
 
     def init_web_server(self) -> None:
         self.flask_app = create_app(
